@@ -11,9 +11,67 @@ import plotly.graph_objects as go
 import io
 import sys
 from pathlib import Path
+import numpy as np
 
 from preprocessor import load_turbine_csv
 import plotly.io as pio
+
+
+# ── LTTB Downsampling (Largest Triangle Three Buckets) ──────
+def lttb_downsample(x, y, n_target):
+    """
+    Downsample (x, y) to at most n_target points using LTTB algorithm.
+    Preserves visual shape better than random sampling.
+    x and y must be same length, 1D arrays.
+    """
+    n = len(x)
+    if n <= n_target:
+        return x, y
+
+    n_target = max(3, n_target)
+    bucket_size = (n - 2) / (n_target - 2)
+
+    result_x = [x[0]]
+    result_y = [y[0]]
+
+    a_idx = 0
+    for i in range(n_target - 2):
+        # Calculate bucket range
+        buck_start = int((i + 0) * bucket_size) + 1
+        buck_end   = int((i + 1) * bucket_size) + 1
+        buck_end   = min(buck_end, n - 1)
+
+        # Calculate average point in next bucket (for triangle area)
+        # For datetime x, compute mean as midpoint of min/max timestamps (arithmetic on datetime is not allowed)
+        next_buck_start = buck_end
+        next_buck_end  = min(int((i + 2) * bucket_size) + 1, n - 1)
+        x_next = x[next_buck_start:next_buck_end + 1]
+        if np.issubdtype(x_next.dtype, np.datetime64):
+            avg_x = x_next[0] + (x_next[-1] - x_next[0]) / 2
+        else:
+            avg_x = np.mean(x_next)
+        avg_y = np.mean(y[next_buck_start:next_buck_end + 1])
+
+        # Find point in current bucket with max triangle area
+        max_area = -1
+        max_area_idx = buck_start
+        ax = x[a_idx]
+        ay = y[a_idx]
+        for j in range(buck_start, buck_end + 1):
+            area = abs(
+                (ax - avg_x) * (y[j] - ay) - (ax - x[j]) * (avg_y - ay)
+            )
+            if area > max_area:
+                max_area = area
+                max_area_idx = j
+
+        result_x.append(x[max_area_idx])
+        result_y.append(y[max_area_idx])
+        a_idx = max_area_idx
+
+    result_x.append(x[-1])
+    result_y.append(y[-1])
+    return np.array(result_x), np.array(result_y)
 
 # Use browser renderer (Chrome) for interactive WebGL plots
 pio.renderers.default = "browser"
@@ -238,11 +296,18 @@ if st.session_state.datasets:
                 key="ts_y_multi"
             )
 
-            col1, col2, col3 = st.columns([1, 1, 2])
+            col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 height = st.slider("Chart height (px)", 300, 800, 450, key="ts_h_multi")
             with col2:
                 show_rangebars = st.checkbox("Show range bars", value=False, key="ts_rangebars")
+            with col3:
+                resample_rule = st.selectbox(
+                    "⏱️ Resample to",
+                    ["All (native)", "1min", "2min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "6h", "12h", "1D"],
+                    index=0,
+                    key="ts_resample",
+                )
 
             # File selector for overlay
             available_files = list(st.session_state.datasets.keys())
@@ -280,8 +345,24 @@ if st.session_state.datasets:
                     # Prepare data
                     plot_df = df_plot[[dt_col, y_col]].dropna()
                     plot_df = plot_df.sort_values(dt_col)
-                    x_vals = plot_df[dt_col].astype(str)  # plotly time series needs string or datetime
-                    y_vals = plot_df[y_col]
+
+                    # Resample by time interval if selected
+                    if resample_rule != "All (native)":
+                        rule = resample_rule
+                        agg_df = plot_df.set_index(dt_col)[y_col].resample(rule).mean().dropna().reset_index()
+                        x_vals = agg_df[dt_col].astype(str)
+                        y_vals = agg_df[y_col]
+                    else:
+                        # LTTB downsample only for very large native datasets
+                        if len(plot_df) > 5000:
+                            x_raw = plot_df[dt_col].values
+                            y_raw = plot_df[y_col].values.astype(float)
+                            x_ds, y_ds = lttb_downsample(x_raw, y_raw, 5000)
+                            x_vals = x_ds.astype(str)
+                            y_vals = y_ds
+                        else:
+                            x_vals = plot_df[dt_col].astype(str)
+                            y_vals = plot_df[y_col]
 
                     # Add range bar if requested
                     if show_rangebars:
@@ -357,6 +438,15 @@ if st.session_state.datasets:
             with col2:
                 show_reg = st.checkbox("Show regression line", value=False, key="sc_reg_multi")
 
+            # Resample control to avoid heavy plots
+            max_points = st.selectbox(
+                "📊 Max points per file",
+                [500, 1000, 2000, 5000, 10000, "All (may be slow)"],
+                index=1,
+                key="sc_max_points",
+                format_func=lambda x: str(x) if isinstance(x, int) else x,
+            )
+
             selected_files_sc = st.multiselect(
                 "📂 Select files to overlay",
                 available_files,
@@ -379,6 +469,11 @@ if st.session_state.datasets:
                         continue
 
                     plot_df = df_plot[[sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
+
+                    # Resample if needed
+                    if max_points != "All (may be slow)" and len(plot_df) > max_points:
+                        plot_df = plot_df.sample(n=max_points, random_state=42)
+
                     color = colors[i % len(colors)]
 
                     x_vals = plot_df[sc_x].values
