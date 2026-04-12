@@ -1,15 +1,22 @@
 """
 Bruce's Data Viz Tool
-Drag & drop data files → instant visualizations for non-data scientists
+Upload multiple CSV or Excel files → overlay comparisons on the same graph.
+Supports turbine sensor CSV format (5-row metadata header) or standard CSV.
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import io
 import sys
+from pathlib import Path
+
+from preprocessor import load_turbine_csv
+import plotly.io as pio
+
+# Use browser renderer (Chrome) for interactive WebGL plots
+pio.renderers.default = "browser"
 
 st.set_page_config(
     page_title="Bruce's Data Viz Tool",
@@ -41,13 +48,6 @@ st.markdown("""
         background: #F8F9FA;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background: #1E3A5F;
-        color: white;
-        border-radius: 10px;
-        padding: 1rem 1.5rem;
-        text-align: center;
-    }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
@@ -55,285 +55,683 @@ st.markdown("""
         padding: 10px 20px;
         border-radius: 8px 8px 0 0;
     }
+    .dataset-tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.8rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Header ──────────────────────────────────────────────────
 st.markdown('<p class="main-header">📊 Bruce\'s Data Viz Tool</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Drag & drop your data — get instant insights. No coding required.</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-header">Upload multiple files · Compare & overlay on the same graph · No coding required.</p>', unsafe_allow_html=True)
 
 # ── File Upload ─────────────────────────────────────────────
-uploaded_file = st.file_uploader(
-    "📁 Upload your CSV or Excel file",
+uploaded_files = st.file_uploader(
+    "📁 Upload CSV or Excel files (select multiple)",
     type=["csv", "xlsx", "xls"],
-    help="Supported: .csv, .xlsx, .xls"
+    accept_multiple_files=True,
+    help="Supported: .csv, .xlsx, .xls  |  Hold Shift or Ctrl to select multiple"
 )
 
-df = None
+# ── Session state for loaded datasets ───────────────────────
+if "datasets" not in st.session_state:
+    st.session_state.datasets = {}  # {filename: {"df": ..., "metadata": ..., "type": ...}}
 
-if uploaded_file is not None:
-    try:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        if uploaded_file.name in st.session_state.datasets:
+            continue  # already loaded
+
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                raw_check = pd.read_csv(uploaded_file, header=None, nrows=1)
+                first_val = str(raw_check.iloc[0, 0]) if raw_check.shape[0] > 0 else ""
+
+                if first_val == "Point Name":
+                    import io as io_module
+                    text_io = io_module.StringIO(uploaded_file.getvalue().decode("utf-8"))
+                    data, metadata = load_turbine_csv(text_io)
+                    df = data.reset_index().rename(columns={"datetime": "Datetime"})
+                    file_type = "turbine"
+                else:
+                    df = pd.read_csv(uploaded_file)
+                    metadata = None
+                    file_type = "standard"
+            else:
+                df = pd.read_excel(uploaded_file)
+                metadata = None
+                file_type = "excel"
+
+            st.session_state.datasets[uploaded_file.name] = {
+                "df": df,
+                "metadata": metadata,
+                "type": file_type,
+            }
+            st.success(f"✅ Loaded `{uploaded_file.name}` — {df.shape[0]} rows × {df.shape[1]} columns")
+        except Exception as e:
+            st.error(f"❌ Failed to load `{uploaded_file.name}`: {e}")
+
+# ── Show loaded datasets + clear button ───────────────────────
+if st.session_state.datasets:
+    col = st.columns([1, 1, 1, 1, 1])
+    with col[0]:
+        st.markdown("**📂 Loaded datasets:**")
+    for i, fname in enumerate(list(st.session_state.datasets.keys())):
+        with col[(i % 5) + 1]:
+            st.caption(f"• {fname}")
+    with col[min(len(st.session_state.datasets), 4) + 1]:
+        if st.button("🗑️ Clear all"):
+            st.session_state.datasets = {}
+            st.rerun()
+
+    st.divider()
+
+    # ── Auto-detect column types helper ──────────────────────
+    def get_column_type(series):
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return "datetime"
+        elif pd.api.types.is_numeric_dtype(series):
+            return "numeric"
         else:
-            df = pd.read_excel(uploaded_file)
-        
-        st.success(f"✅ Loaded `{uploaded_file.name}` — {df.shape[0]} rows × {df.shape[1]} columns")
-    except Exception as e:
-        st.error(f"❌ Failed to load file: {e}")
-        st.stop()
-else:
-    st.info("👆 Upload a file above to get started")
-    st.stop()
+            return "categorical"
 
-# ── Auto-detect column types ─────────────────────────────────
-def get_column_type(series):
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return "datetime"
-    elif pd.api.types.is_numeric_dtype(series):
-        return "numeric"
+    # Collect all column types across datasets (union)
+    all_cols = set()
+    for ds in st.session_state.datasets.values():
+        all_cols.update(ds["df"].columns)
+    all_cols = sorted(all_cols)
+
+    col_types = {}
+    for col in all_cols:
+        for ds in st.session_state.datasets.values():
+            if col in ds["df"].columns:
+                col_types[col] = get_column_type(ds["df"][col])
+                break
+
+    num_cols  = [c for c, t in col_types.items() if t == "numeric"]
+    cat_cols  = [c for c, t in col_types.items() if t == "categorical"]
+    date_cols = [c for c, t in col_types.items() if t == "datetime"]
+
+    # ── Sidebar: Data Summary ────────────────────────────────
+    with st.sidebar:
+        st.header("📋 Data Summary")
+        st.metric("Datasets loaded", len(st.session_state.datasets))
+
+        total_rows = sum(ds["df"].shape[0] for ds in st.session_state.datasets.values())
+        total_cols = len(all_cols)
+        st.metric("Total rows (all files)", total_rows)
+        st.metric("Total columns", total_cols)
+        st.metric("Numeric cols", len(num_cols))
+        st.metric("Date cols", len(date_cols))
+
+        st.subheader("📂 Dataset Details")
+        for fname, ds in st.session_state.datasets.items():
+            with st.expander(f"📄 {fname}"):
+                df_sn = ds["df"]
+                st.write(f"Rows: {df_sn.shape[0]} · Cols: {df_sn.shape[1]}")
+                if "Datetime" in df_sn.columns or "datetime" in df_sn.columns:
+                    dt_col = "Datetime" if "Datetime" in df_sn.columns else "datetime"
+                    try:
+                        dt_min = df_sn[dt_col].min()
+                        dt_max = df_sn[dt_col].max()
+                        st.write(f"📅 {dt_min} → {dt_max}")
+                    except:
+                        pass
+                if ds["metadata"]:
+                    st.write(f"🔧 {len(ds['metadata'])} sensors")
+
+    # ── Quick Stats ─────────────────────────────────────────
+    st.subheader("📈 Quick Statistics")
+
+    if len(st.session_state.datasets) == 1:
+        # Single dataset — show normal stats
+        fname = list(st.session_state.datasets.keys())[0]
+        ds = st.session_state.datasets[fname]
+        df = ds["df"]
+        tab_stat, tab_head = st.tabs(["📊 Statistics", "🔍 Data Preview"])
+        with tab_stat:
+            if len(num_cols) > 0:
+                st.dataframe(df[num_cols].describe(), use_container_width=True)
+            else:
+                st.info("No numeric columns found for statistics.")
+        with tab_head:
+            st.dataframe(df.head(10), use_container_width=True)
     else:
-        return "categorical"
+        # Multi-dataset — show comparison
+        tab_stat, tab_head = st.tabs(["📊 Statistics", "🔍 Data Preview"])
+        with tab_stat:
+            sel = st.selectbox("Select dataset for stats", list(st.session_state.datasets.keys()), key="stats_dataset")
+            ds = st.session_state.datasets[sel]
+            df = ds["df"]
+            if len(num_cols) > 0:
+                st.dataframe(df[num_cols].describe(), use_container_width=True)
+            else:
+                st.info("No numeric columns found for statistics.")
+        with tab_head:
+            st.dataframe(df.head(10), use_container_width=True)
 
-df.columns = df.columns.str.strip()
+    st.divider()
 
-col_types = {col: get_column_type(df[col]) for col in df.columns}
-num_cols = [c for c, t in col_types.items() if t == "numeric"]
-cat_cols = [c for c, t in col_types.items() if t == "categorical"]
-date_cols = [c for c, t in col_types.items() if t == "datetime"]
+    # ══════════════════════════════════════════════════════════
+    # VISUALIZATION SECTION
+    # ══════════════════════════════════════════════════════════
+    st.subheader("🎨 Visualizations")
 
-# ── Sidebar: Data Summary ────────────────────────────────────
-with st.sidebar:
-    st.header("📋 Data Summary")
-    
-    st.metric("Rows", df.shape[0])
-    st.metric("Columns", df.shape[1])
-    st.metric("Numeric cols", len(num_cols))
-    
-    st.subheader("Column Types")
-    for col, ctype in col_types.items():
-        emoji = {"numeric": "🔢", "datetime": "📅", "categorical": "🏷️"}[ctype]
-        st.write(f"{emoji} `{col}` — {ctype}")
-
-# ── Quick Stats ─────────────────────────────────────────────
-st.subheader("📈 Quick Statistics")
-tab_stat, tab_head = st.tabs(["📊 Statistics", "🔍 Data Preview"])
-
-with tab_stat:
-    if len(num_cols) > 0:
-        st.dataframe(df[num_cols].describe(), use_container_width=True)
-    else:
-        st.info("No numeric columns found for statistics.")
-
-with tab_head:
-    st.dataframe(df.head(10), use_container_width=True)
-
-st.divider()
-
-# ── Visualization Section ───────────────────────────────────
-st.subheader("🎨 Visualizations")
-
-viz_tab1, viz_tab2, viz_tab3 = st.tabs(["📈 Time Series", "�散 Scatter Plot", "📊 Statistics"])
-
-# ── Time Series ──────────────────────────────────────────────
-with viz_tab1:
-    st.markdown("**Select columns for time series visualization**")
-    
-    x_col = st.selectbox("X-axis (usually time/date)", date_cols if date_cols else df.columns.tolist(), key="ts_x")
-    y_col = st.selectbox("Y-axis (value to plot)", num_cols if num_cols else ["(no numeric columns)"], key="ts_y")
-    
-    if x_col and y_col and y_col != "(no numeric columns)":
-        col1, col2, col3 = st.columns([1, 1, 2])
-        
-        with col1:
-            height = st.slider("Chart height (px)", 300, 800, 450, key="ts_h")
-        with col2:
-            color_col = st.selectbox("Group by (optional)", ["None"] + cat_cols, key="ts_color")
-        
-        color_arg = color_col if color_col != "None" else None
-        
-        fig = px.line(
-            df, x=x_col, y=y_col,
-            color=color_arg,
-            title=f"{y_col} over {x_col}",
-            height=height,
-            markers=True
-        )
-        fig.update_layout(
-            template="plotly_white",
-            title_font_size=18,
-            legend_title_text=color_arg if color_arg else None
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Download
-        buf = io.StringIO()
-        fig.write_html(buf)
-        st.download_button("📥 Download HTML", buf.getvalue(), f"{y_col}_timeseries.html", "text/html", key="dl_ts")
-    else:
-        st.warning("⚠️ Need at least one date/datetime column and one numeric column for time series.")
-
-# ── Scatter Plot ─────────────────────────────────────────────
-with viz_tab2:
-    st.markdown("**Explore relationships between two numeric variables**")
-    
-    sc_x = st.selectbox("X-axis", num_cols if num_cols else df.columns.tolist(), key="sc_x")
-    sc_y = st.selectbox("Y-axis", num_cols if num_cols else ["(no numeric columns)"], key="sc_y")
-    sc_color = st.selectbox("Color by (optional)", ["None"] + cat_cols, key="sc_color")
-    sc_size = st.selectbox("Size by (optional)", ["None"] + num_cols, key="sc_size")
-    
-    if sc_y != "(no numeric columns)":
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            height = st.slider("Chart height (px)", 300, 800, 500, key="sc_h")
-        with col2:
-            show_reg = st.checkbox("Show regression line", value=False, key="sc_reg")
-        
-        color_arg = sc_color if sc_color != "None" else None
-        size_arg = sc_size if sc_size != "None" else None
-        
-        fig = px.scatter(
-            df, x=sc_x, y=sc_y,
-            color=color_arg,
-            size=size_arg,
-            title=f"{sc_y} vs {sc_x}",
-            height=height,
-            opacity=0.7
-        )
-        
-        if show_reg and color_arg is None:
-            fig.update_layout(shapes=[
-                dict(
-                    type="line",
-                    x0=df[sc_x].min(), x1=df[sc_x].max(),
-                    y0=df[sc_x].min() * (df[sc_y].std() / df[sc_x].std()) + df[sc_y].mean() - (df[sc_x].std() / df[sc_x].std()) * df[sc_x].mean(),
-                    y1=df[sc_x].max() * (df[sc_y].std() / df[sc_x].std()) + df[sc_y].mean() - (df[sc_x].std() / df[sc_x].std()) * df[sc_x].mean(),
-                    line=dict(color="red", width=2, dash="dot")
-                )
-            ])
-        
-        fig.update_layout(template="plotly_white", title_font_size=18)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        buf = io.StringIO()
-        fig.write_html(buf)
-        st.download_button("📥 Download HTML", buf.getvalue(), f"{sc_y}_vs_{sc_x}_scatter.html", "text/html", key="dl_sc")
-    else:
-        st.warning("⚠️ Need at least two numeric columns for scatter plot.")
-
-# ── Statistics Plots ─────────────────────────────────────────
-with viz_tab3:
-    st.markdown("**Distribution & statistical visualizations**")
-    
-    stat_type = st.selectbox(
-        "Choose chart type",
-        [
-            "📊 Histogram (Distribution)",
-            "📦 Box Plot (Distribution by Category)",
-            "🎯 Density Plot",
-            "📈 Bar Chart (Categorical counts)",
-            "🔥 Correlation Heatmap"
-        ],
-        key="stat_type"
+    viz_tab1, viz_tab2, viz_tab3 = st.tabs(
+        ["📈 Time Series", "📊 Scatter Plot", "📊 Statistics"]
     )
-    
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        height = st.slider("Chart height (px)", 300, 700, 450, key="stat_h")
-    
-    if stat_type == "📊 Histogram (Distribution)":
-        hist_col = st.selectbox("Select column", num_cols if num_cols else df.columns.tolist(), key="hist_col")
-        bins = st.slider("Number of bins", 5, 100, 30, key="hist_bins")
-        
-        fig = px.histogram(
-            df, x=hist_col, nbins=bins,
-            title=f"Distribution of {hist_col}",
-            height=height,
-            color_discrete_sequence=["#1E3A5F"]
-        )
-        fig.update_layout(template="plotly_white", bargap=0.1)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    elif stat_type == "📦 Box Plot (Distribution by Category)":
-        val_col = st.selectbox("Value column (numeric)", num_cols, key="box_val")
-        cat_col = st.selectbox("Category column", cat_cols if cat_cols else df.columns.tolist(), key="box_cat")
-        
-        fig = px.box(
-            df, x=cat_col, y=val_col,
-            title=f"{val_col} by {cat_col}",
-            height=height,
-            color=cat_col,
-            color_discrete_sequence=px.colors.qualitative.Set2
-        )
-        fig.update_layout(template="plotly_white", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    elif stat_type == "🎯 Density Plot":
-        dense_col = st.selectbox("Select column", num_cols if num_cols else df.columns.tolist(), key="dense_col")
-        
-        fig = px.histogram(
-            df, x=dense_col, nbins=50,
-            title=f"Density of {dense_col}",
-            height=height,
-            histnorm="density",
-            color_discrete_sequence=["#4C78A8"]
-        )
-        fig.update_layout(template="plotly_white", bargap=0.05)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    elif stat_type == "📈 Bar Chart (Categorical counts)":
-        bar_col = st.selectbox("Select column", cat_cols if cat_cols else df.columns.tolist(), key="bar_col")
-        top_n = st.slider("Show top N categories", 5, 50, 20, key="bar_top")
-        
-        top_cats = df[bar_col].value_counts().head(top_n)
-        fig = px.bar(
-            x=top_cats.index, y=top_cats.values,
-            title=f"Top {top_n} {bar_col}",
-            height=height,
-            color=top_cats.values,
-            color_continuous_scale="Blues"
-        )
-        fig.update_layout(template="plotly_white", xaxis_title=bar_col, yaxis_title="Count", showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    elif stat_type == "🔥 Correlation Heatmap":
-        if len(num_cols) < 2:
-            st.warning("⚠️ Need at least 2 numeric columns for correlation heatmap.")
+
+    # ── Time Series ──────────────────────────────────────────
+    with viz_tab1:
+        st.markdown("**Compare multiple files on the same time series graph**")
+
+        if len(num_cols) == 0 or len(date_cols) == 0:
+            st.warning("⚠️ Need at least one date column and one numeric column.")
         else:
-            corr = df[num_cols].corr()
-            fig = px.imshow(
-                corr,
-                text_auto=True,
-                title="Correlation Heatmap",
-                height=height,
-                color_continuous_scale="RdBu_r",
-                aspect="auto"
+            # Y-axis sensor/column selector
+            y_col = st.selectbox(
+                "Y-axis (sensor / value to plot)",
+                num_cols,
+                key="ts_y_multi"
             )
-            fig.update_layout(template="plotly_white")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            buf = io.StringIO()
-            fig.write_html(buf)
-            st.download_button("📥 Download HTML", buf.getvalue(), "correlation_heatmap.html", "text/html", key="dl_corr")
 
-st.divider()
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                height = st.slider("Chart height (px)", 300, 800, 450, key="ts_h_multi")
+            with col2:
+                show_rangebars = st.checkbox("Show range bars", value=False, key="ts_rangebars")
 
-# ── Export Data ──────────────────────────────────────────────
-with st.expander("📤 Export Processed Data"):
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            "📄 Download as CSV",
-            df.to_csv(index=False).encode(),
-            f"processed_data.csv",
-            "text/csv"
+            # File selector for overlay
+            available_files = list(st.session_state.datasets.keys())
+            selected_files = st.multiselect(
+                "📂 Select files to overlay",
+                available_files,
+                default=available_files[:1] if len(available_files) == 1 else available_files,
+                key="ts_files"
+            )
+
+            if not selected_files:
+                st.info("Select at least one file above to plot.")
+            else:
+                # Build traces for each selected file
+                fig = go.Figure()
+
+                # Color palette for multiple traces
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+                range_bar_shapes = []
+
+                for i, fname in enumerate(selected_files):
+                    ds = st.session_state.datasets[fname]
+                    df_plot = ds["df"]
+
+                    if y_col not in df_plot.columns:
+                        st.warning(f"`{fname}` does not have column `{y_col}` — skipped.")
+                        continue
+                    if "Datetime" not in df_plot.columns and "datetime" not in df_plot.columns:
+                        st.warning(f"`{fname}` has no datetime column — skipped.")
+                        continue
+
+                    dt_col = "Datetime" if "Datetime" in df_plot.columns else "datetime"
+                    color = colors[i % len(colors)]
+
+                    # Prepare data
+                    plot_df = df_plot[[dt_col, y_col]].dropna()
+                    plot_df = plot_df.sort_values(dt_col)
+                    x_vals = plot_df[dt_col].astype(str)  # plotly time series needs string or datetime
+                    y_vals = plot_df[y_col]
+
+                    # Add range bar if requested
+                    if show_rangebars:
+                        # Show ±5% of y range as a semi-transparent band
+                        y_mid = y_vals.mean()
+                        y_std = y_vals.std()
+                        y_lo = y_mid - 2 * y_std
+                        y_hi = y_mid + 2 * y_std
+                        fig.add_trace(go.Scatter(
+                            x=x_vals.tolist() + x_vals.tolist()[::-1],
+                            y=y_lo + [y_hi] * len(y_vals) + ([y_lo] if len(y_vals) else []),
+                            fill='toself',
+                            fillcolor=f'rgba{tuple(list(px.colors.hex_to_rgb(color)) + [0.1])}',
+                            line=dict(color='rgba(0,0,0,0)'),
+                            name=f'{fname} ±2σ',
+                            showlegend=True,
+                            hoverinfo='skip',
+                        ))
+
+                    fig.add_trace(go.Scatter(
+                        x=x_vals.tolist(),
+                        y=y_vals.tolist(),
+                        mode='lines',
+                        name=fname,
+                        line=dict(color=color, width=1.5),
+                        hovertemplate=f"<b>{fname}</b><br>{y_col}: %{{y}}<br>{dt_col}: %{{x}}<extra></extra>",
+                    ))
+
+                fig.update_layout(
+                    title=dict(text=f"{y_col} — Comparison", font_size=18),
+                    template="plotly_white",
+                    height=height,
+                    xaxis=dict(
+                        rangeslider=dict(visible=True),
+                        type="date",
+                        title=dt_col
+                    ),
+                    yaxis=dict(title=y_col),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="center",
+                        x=0.5
+                    ),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                buf = io.StringIO()
+                fig.write_html(buf)
+                st.download_button(
+                    "📥 Download HTML",
+                    buf.getvalue(),
+                    f"{y_col}_timeseries_comparison.html",
+                    "text/html",
+                    key="dl_ts_multi"
+                )
+
+    # ── Scatter Plot ─────────────────────────────────────────
+    with viz_tab2:
+        st.markdown("**Compare relationships across multiple files**")
+
+        if len(num_cols) < 2:
+            st.warning("⚠️ Need at least 2 numeric columns for scatter plot.")
+        else:
+            sc_x = st.selectbox("X-axis", num_cols, key="sc_x_multi")
+            sc_y = st.selectbox("Y-axis", num_cols, key="sc_y_multi")
+
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                height = st.slider("Chart height (px)", 300, 800, 500, key="sc_h_multi")
+            with col2:
+                show_reg = st.checkbox("Show regression line", value=False, key="sc_reg_multi")
+
+            selected_files_sc = st.multiselect(
+                "📂 Select files to overlay",
+                available_files,
+                default=available_files[:1] if len(available_files) == 1 else available_files,
+                key="sc_files"
+            )
+
+            if not selected_files_sc:
+                st.info("Select at least one file above to plot.")
+            else:
+                fig = go.Figure()
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+
+                for i, fname in enumerate(selected_files_sc):
+                    ds = st.session_state.datasets[fname]
+                    df_plot = ds["df"]
+
+                    if sc_x not in df_plot.columns or sc_y not in df_plot.columns:
+                        st.warning(f"`{fname}` missing `{sc_x}` or `{sc_y}` — skipped.")
+                        continue
+
+                    plot_df = df_plot[[sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
+                    color = colors[i % len(colors)]
+
+                    x_vals = plot_df[sc_x].values
+                    y_vals = plot_df[sc_y].values
+
+                    fig.add_trace(go.Scatter(
+                        x=x_vals.tolist(),
+                        y=y_vals.tolist(),
+                        mode='markers',
+                        name=fname,
+                        marker=dict(color=color, size=6, opacity=0.6),
+                        hovertemplate=f"<b>{fname}</b><br>{sc_x}: %{{x}}<br>{sc_y}: %{{y}}<extra></extra>",
+                    ))
+
+                    # Regression line per file
+                    if show_reg:
+                        import numpy as np
+                        x_clean = plot_df[sc_x].values
+                        y_clean = plot_df[sc_y].values
+                        mask = ~(np.isnan(x_clean) | np.isnan(y_clean))
+                        x_c = x_clean[mask]
+                        y_c = y_clean[mask]
+                        if len(x_c) > 1:
+                            slope, intercept = np.polyfit(x_c, y_c, 1)
+                            x_range = [x_c.min(), x_c.max()]
+                            fig.add_trace(go.Scatter(
+                                x=x_range,
+                                y=[slope * x_range[0] + intercept, slope * x_range[1] + intercept],
+                                mode='lines',
+                                name=f"{fname} trend",
+                                line=dict(color=color, width=2, dash='dot'),
+                                showlegend=True,
+                                hoverinfo='skip',
+                            ))
+
+                fig.update_layout(
+                    title=dict(text=f"{sc_y} vs {sc_x}", font_size=18),
+                    template="plotly_white",
+                    height=height,
+                    xaxis=dict(title=sc_x),
+                    yaxis=dict(title=sc_y),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+                    hovermode="closest",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                buf = io.StringIO()
+                fig.write_html(buf)
+                st.download_button(
+                    "📥 Download HTML",
+                    buf.getvalue(),
+                    f"{sc_y}_vs_{sc_x}_scatter.html",
+                    "text/html",
+                    key="dl_sc_multi"
+                )
+
+    # ── Statistics Plots ────────────────────────────────────
+    with viz_tab3:
+        st.markdown("**Distribution & statistical visualizations**")
+
+        stat_type = st.selectbox(
+            "Choose chart type",
+            [
+                "📊 Histogram (Distribution)",
+                "📦 Box Plot (by File)",
+                "📦 Box Plot (Distribution by Category)",
+                "🎯 Density Plot",
+                "📈 Bar Chart (Categorical counts)",
+                "🔥 Correlation Heatmap",
+                "📊 Multi-file Histogram Overlay",
+            ],
+            key="stat_type_multi"
         )
-    with col2:
-        st.download_button(
-            "📗 Download as Excel",
-            df.to_excel(index=False, engine="openpyxl"),
-            f"processed_data.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
 
-st.caption("Built with Streamlit + Plotly · Bruce's Data Viz Tool")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            height = st.slider("Chart height (px)", 300, 700, 450, key="stat_h_multi")
+
+        # ── Histogram ──────────────────────────────────────
+        if stat_type == "📊 Histogram (Distribution)":
+            hist_col = st.selectbox("Select column", num_cols, key="hist_col_multi")
+            bins = st.slider("Number of bins", 5, 100, 30, key="hist_bins_multi")
+            overlay = st.checkbox("Overlay by file (density)", value=False, key="hist_overlay")
+
+            if overlay:
+                fig = go.Figure()
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+                for i, fname in enumerate(selected_files if 'selected_files' in locals() else list(st.session_state.datasets.keys())):
+                    ds = st.session_state.datasets.get(fname)
+                    if not ds or hist_col not in ds["df"].columns:
+                        continue
+                    plot_df = ds["df"][[hist_col]].dropna()
+                    fig.add_trace(go.Histogram(
+                        x=plot_df[hist_col],
+                        nbinsx=bins,
+                        name=fname,
+                        marker_color=colors[i % len(colors)],
+                        opacity=0.6,
+                    ))
+                fig.update_layout(
+                    title=dict(text=f"Distribution of {hist_col} — by file", font_size=16),
+                    template="plotly_white",
+                    height=height,
+                    barmode="overlay",
+                    bargap=0.05,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                sel = st.selectbox("Select dataset", list(st.session_state.datasets.keys()), key="hist_ds")
+                ds = st.session_state.datasets[sel]
+                if hist_col in ds["df"].columns:
+                    plot_df = ds["df"][[hist_col]].dropna()
+                    fig = px.histogram(
+                        plot_df, x=hist_col, nbins=bins,
+                        title=f"Distribution of {hist_col} ({sel})",
+                        height=height,
+                        color_discrete_sequence=["#1E3A5F"]
+                    )
+                    fig.update_layout(template="plotly_white", bargap=0.1)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning(f"`{sel}` does not have column `{hist_col}`")
+
+        # ── Multi-file Histogram Overlay ──────────────────
+        elif stat_type == "📊 Multi-file Histogram Overlay":
+            hist_col = st.selectbox("Select column", num_cols, key="hist_col_overlay")
+            bins = st.slider("Number of bins", 5, 100, 30, key="hist_bins_overlay2")
+            avail = list(st.session_state.datasets.keys())
+            sel_files = st.multiselect("Select files", avail, default=avail, key="hist_files")
+            normalize = st.checkbox("Normalize (density mode)", value=True, key="hist_norm")
+
+            if sel_files:
+                fig = go.Figure()
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+                for i, fname in enumerate(sel_files):
+                    ds = st.session_state.datasets[fname]
+                    if hist_col not in ds["df"].columns:
+                        continue
+                    plot_df = ds["df"][[hist_col]].dropna()
+                    fig.add_trace(go.Histogram(
+                        x=plot_df[hist_col],
+                        nbinsx=bins,
+                        name=fname,
+                        marker_color=colors[i % len(colors)],
+                        opacity=0.6,
+                        histnorm="density" if normalize else "",
+                    ))
+                fig.update_layout(
+                    title=dict(text=f"Distribution of {hist_col} — density overlay", font_size=16),
+                    template="plotly_white",
+                    height=height,
+                    barmode="overlay",
+                    bargap=0.05,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Select at least one file.")
+
+        # ── Box Plot by File ────────────────────────────────
+        elif stat_type == "📦 Box Plot (by File)":
+            val_col = st.selectbox("Value column (numeric)", num_cols, key="box_val_multi")
+            avail = list(st.session_state.datasets.keys())
+            sel_files = st.multiselect("Select files", avail, default=avail, key="box_files")
+
+            if sel_files and val_col:
+                fig = go.Figure()
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+                all_labels = []
+                all_vals = []
+                for fname in sel_files:
+                    ds = st.session_state.datasets[fname]
+                    if val_col not in ds["df"].columns:
+                        continue
+                    vals = ds["df"][val_col].dropna().tolist()
+                    all_labels.extend([fname] * len(vals))
+                    all_vals.extend(vals)
+
+                if all_vals:
+                    box_df = pd.DataFrame({"file": all_labels, "value": all_vals})
+                    fig = px.box(
+                        box_df, x="file", y="value",
+                        title=f"{val_col} by file",
+                        height=height,
+                        color="file",
+                        color_discrete_sequence=px.colors.qualitative.Plotly
+                    )
+                    fig.update_layout(template="plotly_white", showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("No data to plot.")
+            else:
+                st.info("Select files and a value column.")
+
+        elif stat_type == "📦 Box Plot (Distribution by Category)":
+            val_col = st.selectbox("Value column (numeric)", num_cols, key="box_val_cat")
+            cat_col = st.selectbox("Category column", cat_cols if cat_cols else num_cols, key="box_cat_multi")
+
+            # Use first dataset for single-category box plot
+            sel = st.selectbox("Select dataset", list(st.session_state.datasets.keys()), key="box_ds_cat")
+            ds = st.session_state.datasets[sel]
+            if val_col in ds["df"].columns and cat_col in ds["df"].columns:
+                fig = px.box(
+                    ds["df"], x=cat_col, y=val_col,
+                    title=f"{val_col} by {cat_col} ({sel})",
+                    height=height,
+                    color=cat_col,
+                    color_discrete_sequence=px.colors.qualitative.Set2
+                )
+                fig.update_layout(template="plotly_white", showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"Selected dataset missing columns.")
+
+        elif stat_type == "🎯 Density Plot":
+            dense_col = st.selectbox("Select column", num_cols, key="dense_col_multi")
+            avail = list(st.session_state.datasets.keys())
+            sel_files = st.multiselect("Select files for density", avail, default=avail, key="dense_files")
+
+            if sel_files:
+                fig = go.Figure()
+                colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
+                for i, fname in enumerate(sel_files):
+                    ds = st.session_state.datasets[fname]
+                    if dense_col not in ds["df"].columns:
+                        continue
+                    plot_df = ds["df"][[dense_col]].dropna()
+                    fig.add_trace(go.Scatter(
+                        x=plot_df[dense_col],
+                        y=[1] * len(plot_df),
+                        mode='markers',
+                        name=fname,
+                        marker=dict(
+                            color=colors[i % len(colors)],
+                            size=4,
+                            opacity=0.5,
+                        ),
+                    ))
+                fig.update_layout(
+                    title=dict(text=f"Density of {dense_col} — by file", font_size=16),
+                    template="plotly_white",
+                    height=height / 2,
+                    showlegend=True,
+                    xaxis_title=dense_col,
+                    yaxis=dict(showticklabels=False, title=""),
+                    hovermode="closest",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Select at least one file.")
+
+        elif stat_type == "📈 Bar Chart (Categorical counts)":
+            bar_col = st.selectbox("Select column", cat_cols if cat_cols else num_cols, key="bar_col_multi")
+            top_n = st.slider("Show top N categories", 5, 50, 20, key="bar_top_multi")
+
+            sel = st.selectbox("Select dataset", list(st.session_state.datasets.keys()), key="bar_ds")
+            ds = st.session_state.datasets[sel]
+            if bar_col in ds["df"].columns:
+                top_cats = ds["df"][bar_col].value_counts().head(top_n)
+                fig = px.bar(
+                    x=top_cats.index, y=top_cats.values,
+                    title=f"Top {top_n} {bar_col} ({sel})",
+                    height=height,
+                    color=top_cats.values,
+                    color_continuous_scale="Blues"
+                )
+                fig.update_layout(template="plotly_white", xaxis_title=bar_col, yaxis_title="Count", showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning(f"`{sel}` missing column `{bar_col}`")
+
+        elif stat_type == "🔥 Correlation Heatmap":
+            if len(num_cols) < 2:
+                st.warning("⚠️ Need at least 2 numeric columns for correlation heatmap.")
+            else:
+                sel = st.selectbox("Select dataset", list(st.session_state.datasets.keys()), key="corr_ds")
+                ds = st.session_state.datasets[sel]
+                df_corr = ds["df"][num_cols].corr()
+                fig = px.imshow(
+                    df_corr,
+                    text_auto=True,
+                    title=f"Correlation Heatmap ({sel})",
+                    height=height,
+                    color_continuous_scale="RdBu_r",
+                    aspect="auto"
+                )
+                fig.update_layout(template="plotly_white")
+                st.plotly_chart(fig, use_container_width=True)
+
+                buf = io.StringIO()
+                fig.write_html(buf)
+                st.download_button(
+                    "📥 Download HTML",
+                    buf.getvalue(),
+                    "correlation_heatmap.html",
+                    "text/html",
+                    key="dl_corr_multi"
+                )
+
+    st.divider()
+
+    # ── Export ──────────────────────────────────────────────
+    with st.expander("📤 Export Data"):
+        col1, col2 = st.columns(2)
+        with col1:
+            if len(st.session_state.datasets) == 1:
+                fname = list(st.session_state.datasets.keys())[0]
+                ds = st.session_state.datasets[fname]
+                st.download_button(
+                    "📄 Download as CSV",
+                    ds["df"].to_csv(index=False).encode(),
+                    f"processed_{fname}.csv",
+                    "text/csv"
+                )
+            else:
+                # Multi-dataset: offer individual downloads
+                sel = st.selectbox("Select dataset to export", list(st.session_state.datasets.keys()), key="export_ds")
+                ds = st.session_state.datasets[sel]
+                st.download_button(
+                    "📄 Download as CSV",
+                    ds["df"].to_csv(index=False).encode(),
+                    f"processed_{sel}.csv",
+                    "text/csv",
+                    key="dl_csv_multi"
+                )
+        with col2:
+            if len(st.session_state.datasets) == 1:
+                fname = list(st.session_state.datasets.keys())[0]
+                ds = st.session_state.datasets[fname]
+                buf_xl = io.BytesIO()
+                ds["df"].to_excel(buf_xl, index=False, engine="openpyxl")
+                buf_xl.seek(0)
+                st.download_button(
+                    "📗 Download as Excel",
+                    buf_xl.getvalue(),
+                    f"processed_{fname}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                sel = st.selectbox("Select dataset to export as Excel", list(st.session_state.datasets.keys()), key="export_ds_xl")
+                ds = st.session_state.datasets[sel]
+                buf_xl = io.BytesIO()
+                ds["df"].to_excel(buf_xl, index=False, engine="openpyxl")
+                buf_xl.seek(0)
+                st.download_button(
+                    "📗 Download as Excel",
+                    buf_xl.getvalue(),
+                    f"processed_{sel}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_xl_multi"
+                )
+
+    st.caption("Built with Streamlit + Plotly · Bruce's Data Viz Tool")
+
+else:
+    st.info("👆 Upload one or more files above to get started")
+    st.stop()
