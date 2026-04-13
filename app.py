@@ -61,7 +61,10 @@ def lttb_downsample(x, y, n_target):
         ax = x_numeric[a_idx]
         ay = y[a_idx]
         for j in range(buck_start, buck_end + 1):
-            area = abs((ax - avg_x) * (y[j] - ay) - (ax - x_numeric[j]) * (avg_y - ay))
+            area = float(abs(
+                float(ax - avg_x) * float(y[j] - ay)
+                - float(ax - x_numeric[j]) * float(avg_y - ay)
+            ))
             if area > max_area:
                 max_area = area
                 max_area_idx = j
