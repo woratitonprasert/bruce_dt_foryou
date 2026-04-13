@@ -817,54 +817,26 @@ if st.session_state.datasets:
 
     # ── Export ──────────────────────────────────────────────
     with st.expander("📤 Export Data"):
-        col1, col2 = st.columns(2)
-        with col1:
-            if len(st.session_state.datasets) == 1:
-                fname = list(st.session_state.datasets.keys())[0]
-                ds = st.session_state.datasets[fname]
-                st.download_button(
-                    "📄 Download as CSV",
-                    ds["df"].to_csv(index=False).encode(),
-                    f"processed_{fname}.csv",
-                    "text/csv"
-                )
-            else:
-                # Multi-dataset: offer individual downloads
-                sel = st.selectbox("Select dataset to export", list(st.session_state.datasets.keys()), key="export_ds")
-                ds = st.session_state.datasets[sel]
-                st.download_button(
-                    "📄 Download as CSV",
-                    ds["df"].to_csv(index=False).encode(),
-                    f"processed_{sel}.csv",
-                    "text/csv",
-                    key="dl_csv_multi"
-                )
-        with col2:
-            if len(st.session_state.datasets) == 1:
-                fname = list(st.session_state.datasets.keys())[0]
-                ds = st.session_state.datasets[fname]
-                buf_xl = io.BytesIO()
-                ds["df"].to_excel(buf_xl, index=False, engine="openpyxl")
-                buf_xl.seek(0)
-                st.download_button(
-                    "📗 Download as Excel",
-                    buf_xl.getvalue(),
-                    f"processed_{fname}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                sel = st.selectbox("Select dataset to export as Excel", list(st.session_state.datasets.keys()), key="export_ds_xl")
-                ds = st.session_state.datasets[sel]
-                buf_xl = io.BytesIO()
-                ds["df"].to_excel(buf_xl, index=False, engine="openpyxl")
-                buf_xl.seek(0)
-                st.download_button(
-                    "📗 Download as Excel",
-                    buf_xl.getvalue(),
-                    f"processed_{sel}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="dl_xl_multi"
-                )
+        if len(st.session_state.datasets) == 1:
+            fname = list(st.session_state.datasets.keys())[0]
+            ds = st.session_state.datasets[fname]
+            st.download_button(
+                "📄 Download as CSV",
+                ds["df"].to_csv(index=False).encode(),
+                f"processed_{fname}.csv",
+                "text/csv"
+            )
+        else:
+            # Multi-dataset: offer individual downloads
+            sel = st.selectbox("Select dataset to export", list(st.session_state.datasets.keys()), key="export_ds")
+            ds = st.session_state.datasets[sel]
+            st.download_button(
+                "📄 Download as CSV",
+                ds["df"].to_csv(index=False).encode(),
+                f"processed_{sel}.csv",
+                "text/csv",
+                key="dl_csv_multi"
+            )
 
     st.caption("Built with Streamlit + Plotly · Bruce's Data Viz Tool")
 
