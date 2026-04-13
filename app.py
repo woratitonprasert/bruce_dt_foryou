@@ -848,16 +848,16 @@ if st.session_state.datasets:
                     key="tod_interval",
                 )
 
-                # Map interval label to pandas offset
+                # Map interval label to Timedelta-compatible strings for dt.floor
                 interval_map = {
-                    "15min": "15T",
-                    "30min": "30T",
-                    "1H":    "1h",
-                    "2H":    "2h",
-                    "4H":    "4h",
-                    "6H":    "6h",
-                    "12H":   "12h",
-                    "1D":    "1D",
+                    "15min": "15 min",
+                    "30min": "30 min",
+                    "1H":    "1 hour",
+                    "2H":    "2 hours",
+                    "4H":    "4 hours",
+                    "6H":    "6 hours",
+                    "12H":   "12 hours",
+                    "1D":    "1 day",
                 }
                 rule = interval_map[tod_interval]
 
