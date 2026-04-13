@@ -31,6 +31,13 @@ def lttb_downsample(x, y, n_target):
     n_target = max(3, n_target)
     bucket_size = (n - 2) / (n_target - 2)
 
+    # Convert datetime64 x to int64 nanoseconds for safe numeric math in LTTB
+    x_is_datetime = np.issubdtype(x.dtype, np.datetime64)
+    if x_is_datetime:
+        x_numeric = x.astype("datetime64[ns]").astype(np.int64)
+    else:
+        x_numeric = x.astype(float) if np.issubdtype(x.dtype, np.number) else x.astype(float)
+
     result_x = [x[0]]
     result_y = [y[0]]
 
@@ -42,25 +49,19 @@ def lttb_downsample(x, y, n_target):
         buck_end   = min(buck_end, n - 1)
 
         # Calculate average point in next bucket (for triangle area)
-        # For datetime x, compute mean as midpoint of min/max timestamps (arithmetic on datetime is not allowed)
         next_buck_start = buck_end
         next_buck_end  = min(int((i + 2) * bucket_size) + 1, n - 1)
-        x_next = x[next_buck_start:next_buck_end + 1]
-        if np.issubdtype(x_next.dtype, np.datetime64):
-            avg_x = x_next[0] + (x_next[-1] - x_next[0]) / 2
-        else:
-            avg_x = np.mean(x_next)
-        avg_y = np.mean(y[next_buck_start:next_buck_end + 1])
+        x_next = x_numeric[next_buck_start:next_buck_end + 1]
+        avg_x  = x_next.mean()
+        avg_y  = np.mean(y[next_buck_start:next_buck_end + 1])
 
         # Find point in current bucket with max triangle area
         max_area = -1.0
         max_area_idx = buck_start
-        ax = x[a_idx]
+        ax = x_numeric[a_idx]
         ay = y[a_idx]
         for j in range(buck_start, buck_end + 1):
-            area = abs(
-                float((ax - avg_x) * (y[j] - ay) - (ax - x[j]) * (avg_y - ay))
-            )
+            area = abs((ax - avg_x) * (y[j] - ay) - (ax - x_numeric[j]) * (avg_y - ay))
             if area > max_area:
                 max_area = area
                 max_area_idx = j
@@ -484,14 +485,18 @@ if st.session_state.datasets:
                         st.warning(f"`{fname}` missing `{sc_x}` or `{sc_y}` — skipped.")
                         continue
 
-                    plot_df = df_plot[[sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
-
-                    # Determine datetime column for time-based resampling
+                    # Detect datetime column before slicing
                     dt_col = None
                     for dc in ["Datetime", "datetime", "Date", "date", "Time", "time"]:
                         if dc in df_plot.columns:
                             dt_col = dc
                             break
+
+                    # Include dt_col in slice so resample has access to it
+                    if dt_col and dt_col not in [sc_x, sc_y]:
+                        plot_df = df_plot[[dt_col, sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
+                    else:
+                        plot_df = df_plot[[sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
 
                     # Apply resampling (same logic as time series plot)
                     if resample_rule_sc != "All (native)" and dt_col:
