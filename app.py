@@ -31,40 +31,38 @@ def lttb_downsample(x, y, n_target):
     n_target = max(3, n_target)
     bucket_size = (n - 2) / (n_target - 2)
 
-    # Convert datetime64 x to int64 nanoseconds for safe numeric math in LTTB
+    # Convert datetime64 x to int64 nanoseconds for safe numeric math
     x_is_datetime = np.issubdtype(x.dtype, np.datetime64)
     if x_is_datetime:
-        x_numeric = x.astype("datetime64[ns]").astype(np.int64)
+        x_num = x.astype("datetime64[ns]").astype(np.int64)
     else:
-        x_numeric = x.astype(float) if np.issubdtype(x.dtype, np.number) else x.astype(float)
+        x_num = np.asarray(x, dtype=float)
+
+    y_num = np.asarray(y, dtype=float)
 
     result_x = [x[0]]
     result_y = [y[0]]
 
     a_idx = 0
+    ax = float(x_num[a_idx])
+    ay = float(y_num[a_idx])
+
     for i in range(n_target - 2):
-        # Calculate bucket range
         buck_start = int((i + 0) * bucket_size) + 1
-        buck_end   = int((i + 1) * bucket_size) + 1
-        buck_end   = min(buck_end, n - 1)
-
-        # Calculate average point in next bucket (for triangle area)
+        buck_end   = min(int((i + 1) * bucket_size) + 1, n - 1)
         next_buck_start = buck_end
-        next_buck_end  = min(int((i + 2) * bucket_size) + 1, n - 1)
-        x_next = x_numeric[next_buck_start:next_buck_end + 1]
-        avg_x  = x_next.mean()
-        avg_y  = np.mean(y[next_buck_start:next_buck_end + 1])
+        next_buck_end   = min(int((i + 2) * bucket_size) + 1, n - 1)
 
-        # Find point in current bucket with max triangle area
+        avg_x = float(x_num[next_buck_start:next_buck_end + 1].mean())
+        avg_y = float(y_num[next_buck_start:next_buck_end + 1].mean())
+
         max_area = -1.0
         max_area_idx = buck_start
-        ax = x_numeric[a_idx]
-        ay = y[a_idx]
         for j in range(buck_start, buck_end + 1):
-            area = float(abs(
-                float(ax - avg_x) * float(y[j] - ay)
-                - float(ax - x_numeric[j]) * float(avg_y - ay)
-            ))
+            dx_a   = ax - avg_x
+            dy_j   = float(y_num[j]) - ay
+            dx_j   = float(x_num[j]) - avg_x
+            area   = abs(dx_a * dy_j - dx_j * (avg_y - ay))
             if area > max_area:
                 max_area = area
                 max_area_idx = j
@@ -72,6 +70,8 @@ def lttb_downsample(x, y, n_target):
         result_x.append(x[max_area_idx])
         result_y.append(y[max_area_idx])
         a_idx = max_area_idx
+        ax = float(x_num[a_idx])
+        ay = float(y_num[a_idx])
 
     result_x.append(x[-1])
     result_y.append(y[-1])
