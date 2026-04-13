@@ -590,6 +590,7 @@ if st.session_state.datasets:
                 "📈 Bar Chart (Categorical counts)",
                 "🔥 Correlation Heatmap",
                 "📊 Multi-file Histogram Overlay",
+                "⏱️ Time-of-Day Box Plot",
             ],
             key="stat_type_multi"
         )
@@ -817,6 +818,104 @@ if st.session_state.datasets:
                     "text/html",
                     key="dl_corr_multi"
                 )
+
+        elif stat_type == "⏱️ Time-of-Day Box Plot":
+            # ── Time-of-Day Box Plot ────────────────────────────────
+            st.markdown("**Box plot of values grouped by time-of-day interval**")
+
+            # Detect datetime column
+            avail_ds = list(st.session_state.datasets.keys())
+            tod_ds_sel = st.selectbox("Select dataset", avail_ds, key="tod_ds")
+            tod_ds = st.session_state.datasets[tod_ds_sel]["df"]
+
+            dt_col_tod = None
+            for dc in ["Datetime", "datetime", "Date", "date", "Time", "time"]:
+                if dc in tod_ds.columns:
+                    dt_col_tod = dc
+                    break
+
+            if dt_col_tod is None:
+                st.warning("⚠️ No datetime column found in selected dataset.")
+            elif len(num_cols) == 0:
+                st.warning("⚠️ No numeric columns found.")
+            else:
+                tod_val_col = st.selectbox("Value column", num_cols, key="tod_val")
+
+                tod_interval = st.selectbox(
+                    "⏱️ Time interval",
+                    ["15min", "30min", "1H", "2H", "4H", "6H", "12H", "1D"],
+                    index=2,
+                    key="tod_interval",
+                )
+
+                # Map interval label to pandas offset
+                interval_map = {
+                    "15min": "15T",
+                    "30min": "30T",
+                    "1H":    "1H",
+                    "2H":    "2H",
+                    "4H":    "4H",
+                    "6H":    "6H",
+                    "12H":   "12H",
+                    "1D":    "1D",
+                }
+                rule = interval_map[tod_interval]
+
+                # Build time-of-day label: floor datetime to interval, then format as HH:MM
+                tod_df = tod_ds.copy()
+                tod_df[dt_col_tod] = pd.to_datetime(tod_df[dt_col_tod], errors="coerce")
+                tod_df = tod_df.dropna(subset=[dt_col_tod, tod_val_col])
+
+                # Floor to interval start, then extract time label
+                tod_df["_tod_bucket"] = tod_df[dt_col_tod].dt.floor(rule)
+                tod_df["_tod_label"] = tod_df["_tod_bucket"].dt.strftime("%H:%M")
+
+                # Group by time bucket
+                grouped = tod_df.groupby("_tod_label")[tod_val_col]
+
+                # Build box plot data
+                box_labels = []
+                box_values = []
+                for label, vals in grouped:
+                    if len(vals) > 0:
+                        box_labels.append(label)
+                        box_values.append(vals.values)
+
+                if not box_labels:
+                    st.warning("No data to display for the selected interval.")
+                else:
+                    import plotly.graph_objects as go
+                    fig = go.Figure()
+                    for i, (label, vals) in enumerate(zip(box_labels, box_values)):
+                        fig.add_trace(go.Box(
+                            y=vals,
+                            name=label,
+                            boxpoints="outliers",
+                            marker=dict(color=px.colors.qualitative.Plotly[i % len(px.colors.qualitative.Plotly)]),
+                            text=[label],
+                            hoverinfo="y+name",
+                        ))
+
+                    fig.update_layout(
+                        title=dict(text=f"{tod_val_col} — Time-of-Day ({tod_interval}) | {tod_ds_sel}", font_size=16),
+                        template="plotly_white",
+                        height=height,
+                        xaxis=dict(title="Time of Day", tickangle=45),
+                        yaxis=dict(title=tod_val_col),
+                        showlegend=False,
+                        boxmode="group",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    buf = io.StringIO()
+                    fig.write_html(buf)
+                    st.download_button(
+                        "📥 Download HTML",
+                        buf.getvalue(),
+                        f"time_of_day_boxplot_{tod_val_col}_{tod_interval}.html",
+                        "text/html",
+                        key="dl_tod_box"
+                    )
 
     st.divider()
 
