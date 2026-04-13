@@ -432,20 +432,30 @@ if st.session_state.datasets:
             sc_x = st.selectbox("X-axis", num_cols, key="sc_x_multi")
             sc_y = st.selectbox("Y-axis", num_cols, key="sc_y_multi")
 
-            col1, col2 = st.columns([1, 1])
+            col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 height = st.slider("Chart height (px)", 300, 800, 500, key="sc_h_multi")
             with col2:
                 show_reg = st.checkbox("Show regression line", value=False, key="sc_reg_multi")
+            with col3:
+                resample_rule_sc = st.selectbox(
+                    "⏱️ Resample to",
+                    ["All (native)", "1min", "2min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "6h", "12h", "1D"],
+                    index=0,
+                    key="ts_resample",
+                )
 
-            # Resample control to avoid heavy plots
-            max_points = st.selectbox(
-                "📊 Max points per file",
-                [500, 1000, 2000, 5000, 10000, "All (may be slow)"],
-                index=1,
-                key="sc_max_points",
-                format_func=lambda x: str(x) if isinstance(x, int) else x,
-            )
+            # Max points control — only shown when resample = "All (native)"
+            if resample_rule_sc == "All (native)":
+                max_points = st.selectbox(
+                    "📊 Max points per file",
+                    [500, 1000, 2000, 5000, 10000, "All (may be slow)"],
+                    index=2,
+                    key="sc_max_points",
+                    format_func=lambda x: str(x) if isinstance(x, int) else x,
+                )
+            else:
+                max_points = "All (native)"
 
             selected_files_sc = st.multiselect(
                 "📂 Select files to overlay",
@@ -470,14 +480,31 @@ if st.session_state.datasets:
 
                     plot_df = df_plot[[sc_x, sc_y]].dropna(subset=[sc_x, sc_y])
 
-                    # Resample if needed
-                    if max_points != "All (may be slow)" and len(plot_df) > max_points:
-                        plot_df = plot_df.sample(n=max_points, random_state=42)
+                    # Determine datetime column for time-based resampling
+                    dt_col = None
+                    for dc in ["Datetime", "datetime", "Date", "date", "Time", "time"]:
+                        if dc in df_plot.columns:
+                            dt_col = dc
+                            break
+
+                    # Apply resampling (same logic as time series plot)
+                    if resample_rule_sc != "All (native)" and dt_col:
+                        rule = resample_rule_sc
+                        plot_df = plot_df.set_index(dt_col)[[sc_x, sc_y]].resample(rule).mean().dropna().reset_index()
+                        x_vals = plot_df[sc_x].values
+                        y_vals = plot_df[sc_y].values
+                    elif max_points != "All (may be slow)" and len(plot_df) > max_points:
+                        # LTTB downsampling for large native datasets
+                        x_raw = plot_df[sc_x].values.astype(float)
+                        y_raw = plot_df[sc_y].values.astype(float)
+                        x_ds, y_ds = lttb_downsample(x_raw, y_raw, max_points)
+                        x_vals = x_ds
+                        y_vals = y_ds
+                    else:
+                        x_vals = plot_df[sc_x].values
+                        y_vals = plot_df[sc_y].values
 
                     color = colors[i % len(colors)]
-
-                    x_vals = plot_df[sc_x].values
-                    y_vals = plot_df[sc_y].values
 
                     fig.add_trace(go.Scatter(
                         x=x_vals.tolist(),
