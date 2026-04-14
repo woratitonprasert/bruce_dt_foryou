@@ -972,18 +972,31 @@ if st.session_state.datasets:
                     key="3d_files"
                 )
 
-                # Resample — LTTB-based max points (same as Scatter tab, since 3D scatter has no time axis)
-                max_3d = st.selectbox(
-                    "📊 Max points per file",
-                    [500, 1000, 2000, 5000, "All"],
-                    index=2,
-                    key="3d_max_pts",
-                    format_func=lambda x: str(x) if isinstance(x, int) else x,
+                # Downsample by multiplier — e.g. "2×" means halve the rows, "5×" means keep 1/5
+                row_count = len(plot_df)
+                multiplier_labels = []
+                for m in [2, 3, 5, 10, 20, 50]:
+                    result_rows = row_count // m
+                    if result_rows >= 10:
+                        multiplier_labels.append(f"{m}×  →  ~{result_rows:,} pts")
+                multiplier_labels.insert(0, "All (native)")
+
+                default_idx = 0
+                selected_mult = st.selectbox(
+                    "🔽 Downsample multiplier",
+                    multiplier_labels,
+                    index=default_idx,
+                    key="3d_downsample_mult",
                 )
 
                 if not selected_3d:
                     st.info("Select at least one file.")
                 else:
+                    # Parse multiplier from label like "2×  →  ~50,000 pts"
+                    mult_val = 0
+                    if selected_mult != "All (native)":
+                        mult_val = int(selected_mult.split("×")[0].strip())
+
                     fig = go.Figure()
                     colors = px.colors.qualitative.Plotly + px.colors.qualitative.Dark24
 
@@ -997,15 +1010,16 @@ if st.session_state.datasets:
 
                         plot_df = df_p[[x_axis, y_axis, z_axis]].dropna()
 
-                        # Downsample with LTTB if needed
-                        if max_3d != "All" and len(plot_df) > max_3d:
+                        # Downsample with LTTB if multiplier is set
+                        if mult_val > 0:
+                            n_target = max(3, len(plot_df) // mult_val)
                             x_raw = plot_df[x_axis].values.astype(float)
                             y_raw = plot_df[y_axis].values.astype(float)
                             z_raw = plot_df[z_axis].values.astype(float)
                             idx_s, _ = lttb_downsample(
                                 np.arange(len(x_raw), dtype=float),
                                 x_raw,
-                                max_3d
+                                n_target
                             )
                             idx_s = idx_s.astype(int)
                             x_vals = x_raw[idx_s]
