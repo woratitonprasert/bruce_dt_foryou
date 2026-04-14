@@ -267,11 +267,11 @@ if st.session_state.datasets:
         tab_stat, tab_head = st.tabs(["📊 Statistics", "🔍 Data Preview"])
         with tab_stat:
             if len(num_cols) > 0:
-                st.dataframe(df[num_cols].describe(), use_container_width=True)
+                st.dataframe(df[num_cols].describe(), width='stretch')
             else:
                 st.info("No numeric columns found for statistics.")
         with tab_head:
-            st.dataframe(df.head(10), use_container_width=True)
+            st.dataframe(df.head(10), width='stretch')
     else:
         # Multi-dataset — show comparison
         tab_stat, tab_head = st.tabs(["📊 Statistics", "🔍 Data Preview"])
@@ -280,11 +280,11 @@ if st.session_state.datasets:
             ds = st.session_state.datasets[sel]
             df = ds["df"]
             if len(num_cols) > 0:
-                st.dataframe(df[num_cols].describe(), use_container_width=True)
+                st.dataframe(df[num_cols].describe(), width='stretch')
             else:
                 st.info("No numeric columns found for statistics.")
         with tab_head:
-            st.dataframe(df.head(10), use_container_width=True)
+            st.dataframe(df.head(10), width='stretch')
 
     st.divider()
 
@@ -426,7 +426,7 @@ if st.session_state.datasets:
                     ),
                     hovermode="x unified",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 buf = io.StringIO()
                 fig.write_html(buf)
@@ -566,7 +566,7 @@ if st.session_state.datasets:
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                     hovermode="closest",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 buf = io.StringIO()
                 fig.write_html(buf)
@@ -629,7 +629,7 @@ if st.session_state.datasets:
                     barmode="overlay",
                     bargap=0.05,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 sel = st.selectbox("Select dataset", list(st.session_state.datasets.keys()), key="hist_ds")
                 ds = st.session_state.datasets[sel]
@@ -642,7 +642,7 @@ if st.session_state.datasets:
                         color_discrete_sequence=["#1E3A5F"]
                     )
                     fig.update_layout(template="plotly_white", bargap=0.1)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 else:
                     st.warning(f"`{sel}` does not have column `{hist_col}`")
 
@@ -677,7 +677,7 @@ if st.session_state.datasets:
                     barmode="overlay",
                     bargap=0.05,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.info("Select at least one file.")
 
@@ -710,7 +710,7 @@ if st.session_state.datasets:
                         color_discrete_sequence=px.colors.qualitative.Plotly
                     )
                     fig.update_layout(template="plotly_white", showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 else:
                     st.warning("No data to plot.")
             else:
@@ -732,7 +732,7 @@ if st.session_state.datasets:
                     color_discrete_sequence=px.colors.qualitative.Set2
                 )
                 fig.update_layout(template="plotly_white", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.warning(f"Selected dataset missing columns.")
 
@@ -769,7 +769,7 @@ if st.session_state.datasets:
                     yaxis=dict(showticklabels=False, title=""),
                     hovermode="closest",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.info("Select at least one file.")
 
@@ -789,7 +789,7 @@ if st.session_state.datasets:
                     color_continuous_scale="Blues"
                 )
                 fig.update_layout(template="plotly_white", xaxis_title=bar_col, yaxis_title="Count", showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             else:
                 st.warning(f"`{sel}` missing column `{bar_col}`")
 
@@ -809,7 +809,7 @@ if st.session_state.datasets:
                     aspect="auto"
                 )
                 fig.update_layout(template="plotly_white")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
                 buf = io.StringIO()
                 fig.write_html(buf)
@@ -907,7 +907,7 @@ if st.session_state.datasets:
                         showlegend=False,
                         boxmode="group",
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
                     buf = io.StringIO()
                     fig.write_html(buf)
@@ -942,6 +942,19 @@ if st.session_state.datasets:
 
             avail_files_3d = list(st.session_state.datasets.keys())
 
+            # ── Shared marker/line style controls ──
+            if plot_mode == "3D Scatter":
+                st.markdown("**Marker Style**")
+                m_col1, m_col2, m_col3, m_col4 = st.columns([1, 1, 1, 1])
+                with m_col1:
+                    marker_size = st.slider("Marker size", 1, 20, 6, key="3d_marker_size")
+                with m_col2:
+                    marker_opacity = st.slider("Opacity", 0.0, 1.0, 0.65, step=0.05, key="3d_marker_opacity")
+                with m_col3:
+                    edge_width = st.slider("Edge width", 0.0, 3.0, 0.5, step=0.1, key="3d_edge_width")
+                with m_col4:
+                    edge_color = st.color_picker("Edge color", "#000000", key="3d_edge_color")
+
             if plot_mode == "3D Scatter":
                 col_x, col_y, col_z = st.columns([1, 1, 1])
                 with col_x:
@@ -959,13 +972,12 @@ if st.session_state.datasets:
                     key="3d_files"
                 )
 
-                # Max points control
-                max_3d = st.selectbox(
-                    "📊 Max points per file",
-                    [500, 1000, 2000, 5000, "All"],
-                    index=2,
-                    key="3d_max_pts",
-                    format_func=lambda x: str(x) if isinstance(x, int) else x,
+                # Resample — same time-based intervals as Time Series tab
+                resample_3d_scatter = st.selectbox(
+                    "⏱️ Resample to",
+                    ["All (native)", "1min", "2min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "6h", "12h", "1D"],
+                    index=0,
+                    key="3d_scatter_resample",
                 )
 
                 if not selected_3d:
@@ -984,20 +996,26 @@ if st.session_state.datasets:
 
                         plot_df = df_p[[x_axis, y_axis, z_axis]].dropna()
 
-                        # Downsample if needed
-                        if max_3d != "All" and len(plot_df) > max_3d:
-                            x_raw = plot_df[x_axis].values.astype(float)
-                            y_raw = plot_df[y_axis].values.astype(float)
-                            z_raw = plot_df[z_axis].values.astype(float)
-                            # LTTB expects (x, y) → returns (sampled_x, sampled_y)
-                            # Pass idx as x so sampled indices come back as floats → cast to int
-                            idx_sampled, _ = lttb_downsample(
-                                np.arange(len(x_raw), dtype=float), x_raw, max_3d
+                        # Resample if requested (same time-based logic as Time Series tab)
+                        if resample_3d_scatter != "All (native)":
+                            x_raw_arr = plot_df[x_axis].values.astype(float)
+                            y_raw_arr = plot_df[y_axis].values.astype(float)
+                            z_raw_arr = plot_df[z_axis].values.astype(float)
+                            n_target = {
+                                "1min": 1440, "2min": 720, "5min": 288,
+                                "10min": 144, "15min": 96, "30min": 48,
+                                "1h": 24, "2h": 12, "4h": 6,
+                                "6h": 4, "12h": 2, "1D": 1,
+                            }.get(resample_3d_scatter, 500)
+                            idx_s, _ = lttb_downsample(
+                                np.arange(len(x_raw_arr), dtype=float),
+                                x_raw_arr,
+                                max(3, n_target)
                             )
-                            idx_sampled = idx_sampled.astype(int)
-                            x_vals = x_raw[idx_sampled]
-                            y_vals = y_raw[idx_sampled]
-                            z_vals = z_raw[idx_sampled]
+                            idx_s = idx_s.astype(int)
+                            x_vals = x_raw_arr[idx_s]
+                            y_vals = y_raw_arr[idx_s]
+                            z_vals = z_raw_arr[idx_s]
                         else:
                             x_vals = plot_df[x_axis].values
                             y_vals = plot_df[y_axis].values
@@ -1012,9 +1030,9 @@ if st.session_state.datasets:
                             name=fname,
                             marker=dict(
                                 color=color,
-                                size=5,
-                                opacity=0.65,
-                                line=dict(width=0.5, color='rgba(0,0,0,0.3)')
+                                size=marker_size,
+                                opacity=marker_opacity,
+                                line=dict(width=edge_width, color=edge_color)
                             ),
                             hovertemplate=(
                                 f"<b>{fname}</b><br>"
@@ -1037,7 +1055,7 @@ if st.session_state.datasets:
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                         margin=dict(l=0, r=0, b=0, t=40),
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
                     buf = io.StringIO()
                     fig.write_html(buf)
