@@ -1161,7 +1161,7 @@ if st.session_state.datasets:
                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                             margin=dict(l=0, r=0, b=0, t=40),
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
 
                         buf = io.StringIO()
                         fig.write_html(buf)
