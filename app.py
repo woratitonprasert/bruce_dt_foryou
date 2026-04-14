@@ -972,12 +972,13 @@ if st.session_state.datasets:
                     key="3d_files"
                 )
 
-                # Resample — same time-based intervals as Time Series tab
-                resample_3d_scatter = st.selectbox(
-                    "⏱️ Resample to",
-                    ["All (native)", "1min", "2min", "5min", "10min", "15min", "30min", "1h", "2h", "4h", "6h", "12h", "1D"],
-                    index=0,
-                    key="3d_scatter_resample",
+                # Resample — LTTB-based max points (same as Scatter tab, since 3D scatter has no time axis)
+                max_3d = st.selectbox(
+                    "📊 Max points per file",
+                    [500, 1000, 2000, 5000, "All"],
+                    index=2,
+                    key="3d_max_pts",
+                    format_func=lambda x: str(x) if isinstance(x, int) else x,
                 )
 
                 if not selected_3d:
@@ -996,26 +997,20 @@ if st.session_state.datasets:
 
                         plot_df = df_p[[x_axis, y_axis, z_axis]].dropna()
 
-                        # Resample if requested (same time-based logic as Time Series tab)
-                        if resample_3d_scatter != "All (native)":
-                            x_raw_arr = plot_df[x_axis].values.astype(float)
-                            y_raw_arr = plot_df[y_axis].values.astype(float)
-                            z_raw_arr = plot_df[z_axis].values.astype(float)
-                            n_target = {
-                                "1min": 1440, "2min": 720, "5min": 288,
-                                "10min": 144, "15min": 96, "30min": 48,
-                                "1h": 24, "2h": 12, "4h": 6,
-                                "6h": 4, "12h": 2, "1D": 1,
-                            }.get(resample_3d_scatter, 500)
+                        # Downsample with LTTB if needed
+                        if max_3d != "All" and len(plot_df) > max_3d:
+                            x_raw = plot_df[x_axis].values.astype(float)
+                            y_raw = plot_df[y_axis].values.astype(float)
+                            z_raw = plot_df[z_axis].values.astype(float)
                             idx_s, _ = lttb_downsample(
-                                np.arange(len(x_raw_arr), dtype=float),
-                                x_raw_arr,
-                                max(3, n_target)
+                                np.arange(len(x_raw), dtype=float),
+                                x_raw,
+                                max_3d
                             )
                             idx_s = idx_s.astype(int)
-                            x_vals = x_raw_arr[idx_s]
-                            y_vals = y_raw_arr[idx_s]
-                            z_vals = z_raw_arr[idx_s]
+                            x_vals = x_raw[idx_s]
+                            y_vals = y_raw[idx_s]
+                            z_vals = z_raw[idx_s]
                         else:
                             x_vals = plot_df[x_axis].values
                             y_vals = plot_df[y_axis].values
