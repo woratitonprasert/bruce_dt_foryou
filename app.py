@@ -989,13 +989,15 @@ if st.session_state.datasets:
                             x_raw = plot_df[x_axis].values.astype(float)
                             y_raw = plot_df[y_axis].values.astype(float)
                             z_raw = plot_df[z_axis].values.astype(float)
-                            # Downsample x,y then pick matching z
-                            _, idx_ds = lttb_downsample(
-                                np.arange(len(x_raw)), x_raw, max_3d
+                            # LTTB expects (x, y) → returns (sampled_x, sampled_y)
+                            # Pass idx as x so sampled indices come back as floats → cast to int
+                            idx_sampled, _ = lttb_downsample(
+                                np.arange(len(x_raw), dtype=float), x_raw, max_3d
                             )
-                            x_vals = x_raw[idx_ds]
-                            y_vals = y_raw[idx_ds]
-                            z_vals = z_raw[idx_ds]
+                            idx_sampled = idx_sampled.astype(int)
+                            x_vals = x_raw[idx_sampled]
+                            y_vals = y_raw[idx_sampled]
+                            z_vals = z_raw[idx_sampled]
                         else:
                             x_vals = plot_df[x_axis].values
                             y_vals = plot_df[y_axis].values
