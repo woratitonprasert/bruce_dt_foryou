@@ -12,6 +12,7 @@ import io
 import sys
 from pathlib import Path
 import numpy as np
+import traceback
 
 from preprocessor import load_turbine_csv
 import plotly.io as pio
@@ -186,7 +187,6 @@ if uploaded_files:
             st.success(f"✅ Loaded `{uploaded_file.name}` — {df.shape[0]} rows × {df.shape[1]} columns")
         except Exception as e:
             st.error(f"❌ Failed to load `{uploaded_file.name}`: {e}")
-            import traceback
             traceback.print_exc()
 
 # ── Show loaded datasets + clear button ───────────────────────
